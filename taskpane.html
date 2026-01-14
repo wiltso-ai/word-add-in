@@ -16,9 +16,30 @@
 </body>
 
 <script>
-    Office.onReady((info) => {
+    const CONFIG_FILES = ["config.json", "config.local.json"];
+
+    async function loadConfig() {
+        const configs = await Promise.all(
+            CONFIG_FILES.map(async (file) => {
+                try {
+                    const response = await fetch(file, { cache: "no-store" });
+                    if (!response.ok) {
+                        return {};
+                    }
+                    return response.json();
+                } catch (error) {
+                    return {};
+                }
+            })
+        );
+
+        return configs.reduce((merged, config) => ({ ...merged, ...config }), {});
+    }
+
+    Office.onReady(async (info) => {
         // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
+            window.appConfig = await loadConfig();
             document.getElementById("helloButton").onclick = sayHello;
         }
     });

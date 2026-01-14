@@ -54,6 +54,23 @@ The manifest file describes your add-in to Office. It contains information such 
 
 The Hello World sample implements a task pane in a file named **taskpane.html** that contains HTML and JavaScript. The **taskpane.html** file contains all the code necessary to display a task pane, interact with the user, and write "Hello World" into the first paragraph of the document.
 
+### Configuration
+
+The add-in reads configuration from small JSON files so you can update endpoints without touching the HTML. The base API URL lives in **config.json**.
+
+1. Update the `baseApiUrl` value in **config.json** to point at your API endpoint.
+1. (Optional) Create a **config.local.json** file for secrets or per-environment overrides. This file is intentionally not committed.
+
+For production packaging, generate **config.local.json** from environment variables in your build or release pipeline so secrets never live in source control. For example:
+
+```console
+cat <<EOF > config.local.json
+{
+  "apiKey": "${API_KEY}"
+}
+EOF
+```
+
 ### Initialize the Office JavaScript API library
 
 The sample initializes the Office JavaScript API library with a call to `office.onReady()` in the **taskpane.html** file. This is required before you can make any calls to the Office JavaScript APIs. For more information about initialization, see [Initialize your Office Add-in](https://learn.microsoft.com/office/dev/add-ins/develop/initialize-add-in).
