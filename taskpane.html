@@ -5,33 +5,291 @@
 <head>
     <!-- Office JavaScript API -->
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 0;
+            padding: 16px;
+            color: #1b1b1b;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin: 0 0 8px;
+        }
+
+        p {
+            margin: 0 0 12px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        button {
+            background-color: #106ebe;
+            border: none;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:disabled {
+            background-color: #c8c8c8;
+            cursor: not-allowed;
+        }
+
+        .status {
+            min-height: 18px;
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+
+        .status.error {
+            color: #a80000;
+        }
+
+        .status.success {
+            color: #107c10;
+        }
+
+        .field {
+            margin-bottom: 12px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .panel {
+            background: #f5f5f5;
+            border: 1px solid #e1e1e1;
+            border-radius: 4px;
+            padding: 8px;
+            white-space: pre-wrap;
+        }
+
+        .panel.muted {
+            color: #666;
+        }
+    </style>
 </head>
 
 <body>
-    <p>This add-in will insert the text 'Hello world!'.</p>
-    <button id="helloButton">Say hello</button>
+    <main>
+        <h1>Law Assistant</h1>
+        <p>Select a statute or citation in the document, then fetch the related law text and summarize it.</p>
 
-    <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
-    <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
+        <div class="controls">
+            <button id="fetchLawButton">Fetch Law Text</button>
+            <button id="summarizeButton" disabled>Summarize Law</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div class="field">
+            <label for="citationText">Selected citation</label>
+            <div id="citationText" class="panel muted">No selection yet.</div>
+        </div>
+
+        <div class="field">
+            <label for="lawText">Fetched law text</label>
+            <pre id="lawText" class="panel muted">Awaiting a fetch.</pre>
+        </div>
+
+        <div class="field">
+            <label for="summaryText">Summary</label>
+            <div id="summaryText" class="panel muted">Awaiting a summary.</div>
+        </div>
+
+        <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
+        <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
+    </main>
 </body>
 
 <script>
+    const LAW_LOOKUP_ENDPOINT = "https://example.com/api/law";
+    const SUMMARY_ENDPOINT = "https://example.com/api/summarize";
+
+    let currentLawText = "";
+
     Office.onReady((info) => {
-        // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
-            document.getElementById("helloButton").onclick = sayHello;
+            document.getElementById("fetchLawButton").onclick = fetchLawText;
+            document.getElementById("summarizeButton").onclick = summarizeLawText;
         }
     });
 
-    function sayHello() {
-        return Word.run((context) => {
+    function setStatus(message, type) {
+        const status = document.getElementById("status");
+        status.textContent = message;
+        status.className = "status";
+        if (type) {
+            status.classList.add(type);
+        }
+    }
 
-            // insert a paragraph at the start of the document.
-            const paragraph = context.document.body.insertParagraph("Hello World", Word.InsertLocation.start);
-            
-            // sync the context to run the previous API call, and return.
-            return context.sync();
+    function setPanelText(id, text, muted) {
+        const panel = document.getElementById(id);
+        panel.textContent = text;
+        panel.classList.toggle("muted", Boolean(muted));
+    }
+
+    function looksLikeCitation(text) {
+        const trimmed = text.trim();
+        if (!trimmed) {
+            return false;
+        }
+
+        const patterns = [
+            /\b\d+\s+U\.?S\.?C\.?\s*§+\s*[\w.-]+\b/i,
+            /\b\d+\s+C\.?F\.?R\.?\s*§+\s*[\w.-]+\b/i,
+            /\b[A-Z][A-Za-z.&\s]+\s+§+\s*[\w.-]+\b/,
+            /\b\d+\s+U\.?S\.?\s+§+\s*[\w.-]+\b/i
+        ];
+
+        return patterns.some((pattern) => pattern.test(trimmed));
+    }
+
+    async function getSelectionText() {
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            selection.load("text");
+            await context.sync();
+            return selection.text || "";
         });
+    }
+
+    async function fetchLawText() {
+        setStatus("Checking selection...", "");
+        const selectionText = await getSelectionText();
+        const trimmedSelection = selectionText.trim();
+
+        if (!trimmedSelection) {
+            setStatus("Select a citation to fetch the law text.", "error");
+            setPanelText("citationText", "No selection yet.", true);
+            setPanelText("lawText", "Awaiting a fetch.", true);
+            setPanelText("summaryText", "Awaiting a summary.", true);
+            currentLawText = "";
+            document.getElementById("summarizeButton").disabled = true;
+            return;
+        }
+
+        setPanelText("citationText", trimmedSelection, false);
+
+        if (!looksLikeCitation(trimmedSelection)) {
+            setStatus("The selection does not look like a statute or citation.", "error");
+            setPanelText("lawText", "Awaiting a fetch.", true);
+            setPanelText("summaryText", "Awaiting a summary.", true);
+            currentLawText = "";
+            document.getElementById("summarizeButton").disabled = true;
+            return;
+        }
+
+        setStatus("Fetching law text...", "");
+        document.getElementById("summarizeButton").disabled = true;
+
+        try {
+            const url = new URL(LAW_LOOKUP_ENDPOINT);
+            url.searchParams.set("citation", trimmedSelection);
+
+            const response = await fetch(url.toString(), {
+                method: "GET",
+                headers: {
+                    "Accept": "application/json, text/plain"
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`Lookup failed (${response.status})`);
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            let lawText = "";
+
+            if (contentType.includes("application/json")) {
+                const data = await response.json();
+                lawText = data.text || data.lawText || data.content || JSON.stringify(data, null, 2);
+            } else {
+                lawText = await response.text();
+            }
+
+            currentLawText = lawText.trim();
+
+            if (!currentLawText) {
+                setStatus("No law text returned for that citation.", "error");
+                setPanelText("lawText", "No law text returned.", true);
+                document.getElementById("summarizeButton").disabled = true;
+                return;
+            }
+
+            setPanelText("lawText", currentLawText, false);
+            setPanelText("summaryText", "Awaiting a summary.", true);
+            setStatus("Law text fetched.", "success");
+            document.getElementById("summarizeButton").disabled = false;
+        } catch (error) {
+            setStatus(`Failed to fetch law text: ${error.message}`, "error");
+            setPanelText("lawText", "Awaiting a fetch.", true);
+            document.getElementById("summarizeButton").disabled = true;
+        }
+    }
+
+    async function summarizeLawText() {
+        if (!currentLawText) {
+            setStatus("Fetch law text before summarizing.", "error");
+            return;
+        }
+
+        setStatus("Summarizing law text...", "");
+        document.getElementById("summarizeButton").disabled = true;
+
+        try {
+            const response = await fetch(SUMMARY_ENDPOINT, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/plain"
+                },
+                body: JSON.stringify({ text: currentLawText })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Summary failed (${response.status})`);
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            let summaryText = "";
+
+            if (contentType.includes("application/json")) {
+                const data = await response.json();
+                summaryText = data.summary || data.text || data.content || JSON.stringify(data, null, 2);
+            } else {
+                summaryText = await response.text();
+            }
+
+            summaryText = summaryText.trim();
+
+            if (!summaryText) {
+                setStatus("No summary returned from the model.", "error");
+                setPanelText("summaryText", "No summary returned.", true);
+                document.getElementById("summarizeButton").disabled = false;
+                return;
+            }
+
+            setPanelText("summaryText", summaryText, false);
+            setStatus("Summary ready.", "success");
+        } catch (error) {
+            setStatus(`Failed to summarize: ${error.message}`, "error");
+        } finally {
+            document.getElementById("summarizeButton").disabled = false;
+        }
     }
 </script>
 
