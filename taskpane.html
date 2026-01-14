@@ -65,6 +65,19 @@
         <button id="cancelButton" hidden>Cancel</button>
     </div>
 
+    <h2>Assistant Preview</h2>
+    <label for="apiEndpoint">API Endpoint</label>
+    <input id="apiEndpoint" type="text" size="60" value="https://example.com/assistant" />
+
+    <div>
+        <label for="questionInput">Question</label>
+        <input id="questionInput" type="text" size="60" placeholder="Ask a question about the document..." />
+        <button id="askAssistantButton">Ask assistant</button>
+    </div>
+
+    <div id="previewStatus">Idle.</div>
+    <pre id="previewOutput"></pre>
+
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
 </body>
@@ -72,6 +85,7 @@
 <script>
     Office.onReady((info) => {
         if (info.host === Office.HostType.Word) {
+            document.getElementById("askAssistantButton").onclick = askAssistant;
             document.getElementById("sendButton").onclick = sendRequest;
             document.getElementById("editButton").onclick = enterEditMode;
             document.getElementById("acceptButton").onclick = applyReplacement;
@@ -111,6 +125,156 @@
         });
     }
 
+    function setPreviewStatus(message) {
+        document.getElementById("previewStatus").textContent = message;
+    }
+
+    function setPreviewOutput(content) {
+        document.getElementById("previewOutput").textContent = content;
+    }
+
+    function formatResponsePreview(response) {
+        const previewLines = [];
+
+        if (response.updatedText) {
+            previewLines.push(`Updated Text:\n${response.updatedText}`);
+        }
+
+        if (response.commentSuggestions.length) {
+            previewLines.push(`Comment Suggestions:\n- ${response.commentSuggestions.join("\n- ")}`);
+        }
+
+        if (response.citations.length) {
+            const citationLines = response.citations.map((citation) => {
+                const quoteSuffix = citation.quote ? `\n  Quote: ${citation.quote}` : "";
+                return `- Source: ${citation.source}${quoteSuffix}`;
+            });
+            previewLines.push(`Citations:\n${citationLines.join("\n")}`);
+        }
+
+        if (response.lawLookup) {
+            previewLines.push(
+                `Law Lookup:\nQuery: ${response.lawLookup.query}\nResults:\n- ${response.lawLookup.results.join("\n- ")}`
+            );
+        }
+
+        if (!previewLines.length) {
+            return "No recognized response fields were returned.";
+        }
+
+        return previewLines.join("\n\n");
+    }
+
+    /**
+     * @typedef {Object} AssistantApiResponse
+     * @property {string=} updatedText
+     * @property {string[]=} commentSuggestions
+     * @property {Array<{source: string, quote?: string}>=} citations
+     * @property {{query: string, results: string[]}=} lawLookup
+     */
+
+    function normalizeAssistantResponse(payload) {
+        const normalized = {
+            updatedText: typeof payload.updatedText === "string" ? payload.updatedText : "",
+            commentSuggestions: Array.isArray(payload.commentSuggestions)
+                ? payload.commentSuggestions.filter((item) => typeof item === "string")
+                : [],
+            citations: Array.isArray(payload.citations)
+                ? payload.citations
+                      .filter((item) => item && typeof item.source === "string")
+                      .map((item) => ({
+                          source: item.source,
+                          quote: typeof item.quote === "string" ? item.quote : "",
+                      }))
+                : [],
+            lawLookup:
+                payload.lawLookup &&
+                typeof payload.lawLookup.query === "string" &&
+                Array.isArray(payload.lawLookup.results)
+                    ? {
+                          query: payload.lawLookup.query,
+                          results: payload.lawLookup.results.filter((item) => typeof item === "string"),
+                      }
+                    : null,
+        };
+
+        return normalized;
+    }
+
+    async function callAssistantApi({ documentText, selectionText, question, endpoint }) {
+        setPreviewStatus("Sending request...");
+        setPreviewOutput("");
+
+        let response;
+        try {
+            response = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ documentText, selectionText, question }),
+            });
+        } catch (error) {
+            setPreviewStatus(`Network error: ${error.message}`);
+            return null;
+        }
+
+        if (!response.ok) {
+            setPreviewStatus(`Request failed with status ${response.status}.`);
+            return null;
+        }
+
+        const responseText = await response.text();
+        if (!responseText.trim()) {
+            setPreviewStatus("Empty response received from the assistant API.");
+            return null;
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(responseText);
+        } catch (error) {
+            setPreviewStatus(`Invalid JSON response: ${error.message}`);
+            return null;
+        }
+
+        if (!parsed || typeof parsed !== "object") {
+            setPreviewStatus("Assistant API returned an unexpected payload.");
+            return null;
+        }
+
+        const normalizedResponse = normalizeAssistantResponse(parsed);
+        setPreviewStatus("Response received.");
+        setPreviewOutput(formatResponsePreview(normalizedResponse));
+        return normalizedResponse;
+    }
+
+    function askAssistant() {
+        return Word.run(async (context) => {
+            const question = document.getElementById("questionInput").value.trim();
+            const endpoint = document.getElementById("apiEndpoint").value.trim();
+
+            if (!endpoint) {
+                setPreviewStatus("Please provide an API endpoint.");
+                return;
+            }
+
+            const body = context.document.body;
+            const selection = context.document.getSelection();
+            body.load("text");
+            selection.load("text");
+            await context.sync();
+
+            await callAssistantApi({
+                documentText: body.text,
+                selectionText: selection.text,
+                question,
+                endpoint,
+            });
+        }).catch((error) => {
+            setPreviewStatus(`Word error: ${error.message}`);
+        });
+    }
     function enterEditMode() {
         responsePreview.focus();
         setPreviewState({ showPreview: true, editable: true });
