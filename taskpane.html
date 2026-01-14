@@ -8,8 +8,19 @@
 </head>
 
 <body>
-    <p>This add-in will insert the text 'Hello world!'.</p>
-    <button id="helloButton">Say hello</button>
+    <p>Select text in the document, then generate an updated preview.</p>
+    <div id="responseSection">
+        <button id="generateButton">Generate update</button>
+    </div>
+    <div id="previewSection" hidden>
+        <label for="previewText">Updated preview (editable):</label>
+        <textarea id="previewText" rows="6" cols="40"></textarea>
+        <div>
+            <button id="acceptButton">Accept</button>
+            <button id="cancelButton">Cancel</button>
+        </div>
+    </div>
+    <p id="statusText" aria-live="polite"></p>
 
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
@@ -19,20 +30,70 @@
     Office.onReady((info) => {
         // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
-            document.getElementById("helloButton").onclick = sayHello;
+            document.getElementById("generateButton").onclick = generateUpdate;
+            document.getElementById("acceptButton").onclick = acceptUpdate;
+            document.getElementById("cancelButton").onclick = cancelUpdate;
         }
     });
 
-    function sayHello() {
-        return Word.run((context) => {
+    const responseSection = document.getElementById("responseSection");
+    const previewSection = document.getElementById("previewSection");
+    const previewText = document.getElementById("previewText");
+    const statusText = document.getElementById("statusText");
 
-            // insert a paragraph at the start of the document.
-            const paragraph = context.document.body.insertParagraph("Hello World", Word.InsertLocation.start);
-            
-            // sync the context to run the previous API call, and return.
-            return context.sync();
+    function setStatus(message) {
+        statusText.textContent = message;
+    }
+
+    function resetUI() {
+        previewSection.hidden = true;
+        responseSection.hidden = false;
+        previewText.value = "";
+    }
+
+    function showPreview(text) {
+        previewText.value = text;
+        previewSection.hidden = false;
+        responseSection.hidden = true;
+    }
+
+    function mockResponse(originalText) {
+        return originalText ? `Updated: ${originalText}` : "";
+    }
+
+    function generateUpdate() {
+        setStatus("Generating preview...");
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            selection.load("text");
+            await context.sync();
+            if (!selection.text) {
+                setStatus("Select some text in the document first.");
+                return;
+            }
+            const updatedText = mockResponse(selection.text);
+            showPreview(updatedText);
+            setStatus("Review the updated text and accept or cancel.");
         });
     }
+
+    function acceptUpdate() {
+        const updatedText = previewText.value;
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            selection.insertText(updatedText, Word.InsertLocation.replace);
+            await context.sync();
+            resetUI();
+            setStatus("Update applied.");
+        });
+    }
+
+    function cancelUpdate() {
+        resetUI();
+        setStatus("Update canceled.");
+    }
+
+    resetUI();
 </script>
 
 </html>
