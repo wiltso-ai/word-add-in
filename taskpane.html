@@ -23,6 +23,19 @@
             margin-top: 6px;
         }
 
+        .panel {
+            border: 1px solid #d0d0d0;
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 12px;
+            background: #fafafa;
+        }
+
+        .panel h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+        }
+
         .button-row {
             display: flex;
             gap: 8px;
@@ -67,6 +80,11 @@
         <button id="cancelButton">Cancel</button>
     </div>
 
+    <div class="button-row">
+        <button id="lookupLawButton" disabled>Lookup law</button>
+        <button id="summarizeLawButton" style="display: none;">Summarize law</button>
+    </div>
+
     <div class="supplemental">
         <label>
             <input type="checkbox" id="suggestCommentsToggle" checked />
@@ -74,16 +92,22 @@
         </label>
     </div>
 
-    <label for="previewInput">Proposed replacement (editable)</label>
-    <textarea id="previewInput" placeholder="Model response will appear here..."></textarea>
+    <div class="panel">
+        <h3>Replacement text (editable)</h3>
+        <textarea id="previewInput" placeholder="Model response will appear here..."></textarea>
+    </div>
+
+    <div class="panel">
+        <h3>Law text</h3>
+        <textarea id="lawTextInput" placeholder="Law text will appear here after lookup..." readonly></textarea>
+    </div>
+
+    <div class="panel">
+        <h3>Law summary</h3>
+        <textarea id="lawSummaryInput" placeholder="Law summary will appear here after summarization..." readonly></textarea>
+    </div>
 
     <div class="supplemental">
-        <label for="lawSummaryInput">Law summary</label>
-        <textarea id="lawSummaryInput" placeholder="Optional law summary will appear here..." readonly></textarea>
-
-        <label for="lawTextInput">Law text</label>
-        <textarea id="lawTextInput" placeholder="Optional law text will appear here..." readonly></textarea>
-
         <label>Comments</label>
         <ul id="commentList" class="comment-list"></ul>
     </div>
@@ -96,6 +120,8 @@
 
 <script>
     const MODEL_API_URL = "https://your-api/assist";
+    const LAW_LOOKUP_API_URL = "https://your-api/law-lookup";
+    const LAW_SUMMARY_API_URL = "https://your-api/law-summary";
     let lastComments = [];
 
     Office.onReady((info) => {
@@ -103,6 +129,13 @@
             document.getElementById("askButton").onclick = askModel;
             document.getElementById("applyButton").onclick = applyReplacement;
             document.getElementById("cancelButton").onclick = resetPreview;
+            document.getElementById("lookupLawButton").onclick = lookupLaw;
+            document.getElementById("summarizeLawButton").onclick = summarizeLaw;
+            Office.context.document.addHandlerAsync(
+                Office.EventType.DocumentSelectionChanged,
+                updateLookupButtonState
+            );
+            updateLookupButtonState();
         }
     });
 
@@ -126,6 +159,22 @@
         });
     }
 
+    function setSummarizeButtonVisible(visible) {
+        const summarizeButton = document.getElementById("summarizeLawButton");
+        summarizeButton.style.display = visible ? "inline-block" : "none";
+        summarizeButton.disabled = !visible;
+    }
+
+    async function updateLookupButtonState() {
+        const lookupButton = document.getElementById("lookupLawButton");
+        try {
+            const { selectionText } = await getDocumentContext();
+            lookupButton.disabled = !selectionText.trim();
+        } catch (error) {
+            lookupButton.disabled = true;
+        }
+    }
+
     async function askModel() {
         const questionInput = document.getElementById("questionInput");
         const previewInput = document.getElementById("previewInput");
@@ -146,6 +195,7 @@
         lawSummaryInput.value = "";
         lawTextInput.value = "";
         commentList.innerHTML = "";
+        setSummarizeButtonVisible(false);
 
         try {
             const { selectionText, documentText } = await getDocumentContext();
@@ -197,6 +247,85 @@
             previewInput.value = "";
             applyButton.disabled = true;
             setStatus(error.message || "Unable to reach model endpoint.", true);
+        }
+    }
+
+    async function lookupLaw() {
+        const lawTextInput = document.getElementById("lawTextInput");
+        const lawSummaryInput = document.getElementById("lawSummaryInput");
+        setStatus("Looking up law text...");
+        lawTextInput.value = "";
+        lawSummaryInput.value = "";
+        setSummarizeButtonVisible(false);
+
+        try {
+            const { selectionText } = await getDocumentContext();
+            if (!selectionText.trim()) {
+                setStatus("Select a law citation before lookup.", true);
+                return;
+            }
+
+            const response = await fetch(LAW_LOOKUP_API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    citation: selectionText,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Law lookup failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            const lawText = data.lawText ?? "";
+            lawTextInput.value = lawText;
+            if (lawText) {
+                setSummarizeButtonVisible(true);
+                setStatus("Law text retrieved. You can summarize it next.");
+            } else {
+                setStatus("Law lookup returned no text.", true);
+            }
+        } catch (error) {
+            setStatus(error.message || "Unable to reach law lookup endpoint.", true);
+        }
+    }
+
+    async function summarizeLaw() {
+        const lawTextInput = document.getElementById("lawTextInput");
+        const lawSummaryInput = document.getElementById("lawSummaryInput");
+        const lawText = lawTextInput.value.trim();
+
+        if (!lawText) {
+            setStatus("Lookup law text before summarizing.", true);
+            return;
+        }
+
+        setStatus("Summarizing law text...");
+        lawSummaryInput.value = "";
+
+        try {
+            const response = await fetch(LAW_SUMMARY_API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    lawText,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Law summary request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            lawSummaryInput.value = data.summary ?? data.lawSummary ?? "";
+            setStatus("Law summary received.");
+        } catch (error) {
+            setStatus(error.message || "Unable to reach summary endpoint.", true);
         }
     }
 
@@ -260,6 +389,7 @@
         document.getElementById("commentList").innerHTML = "";
         lastComments = [];
         document.getElementById("applyButton").disabled = true;
+        setSummarizeButtonVisible(false);
         setStatus("Preview cleared.");
     }
 </script>
