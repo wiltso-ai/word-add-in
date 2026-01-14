@@ -5,33 +5,157 @@
 <head>
     <!-- Office JavaScript API -->
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            padding: 16px;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-top: 12px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            margin-top: 6px;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .status {
+            margin-top: 12px;
+            font-size: 12px;
+            color: #555;
+        }
+    </style>
 </head>
 
 <body>
-    <p>This add-in will insert the text 'Hello world!'.</p>
-    <button id="helloButton">Say hello</button>
+    <p>Ask a question about the selected text and preview the proposed replacement.</p>
+
+    <label for="questionInput">Question</label>
+    <textarea id="questionInput" placeholder="Ask a question about the selection..."></textarea>
+
+    <div class="button-row">
+        <button id="askButton">Ask</button>
+        <button id="applyButton" disabled>Apply</button>
+        <button id="cancelButton">Cancel</button>
+    </div>
+
+    <label for="previewInput">Proposed replacement (editable)</label>
+    <textarea id="previewInput" placeholder="Model response will appear here..."></textarea>
+
+    <div id="statusMessage" class="status"></div>
 
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
 </body>
 
 <script>
+    const MODEL_ENDPOINT = "/api/model";
+
     Office.onReady((info) => {
-        // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
-            document.getElementById("helloButton").onclick = sayHello;
+            document.getElementById("askButton").onclick = askModel;
+            document.getElementById("applyButton").onclick = applyReplacement;
+            document.getElementById("cancelButton").onclick = resetPreview;
         }
     });
 
-    function sayHello() {
-        return Word.run((context) => {
+    function setStatus(message) {
+        document.getElementById("statusMessage").textContent = message;
+    }
 
-            // insert a paragraph at the start of the document.
-            const paragraph = context.document.body.insertParagraph("Hello World", Word.InsertLocation.start);
-            
-            // sync the context to run the previous API call, and return.
-            return context.sync();
+    async function getDocumentContext() {
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            const selectionText = selection.getText();
+            const documentText = context.document.body.getText();
+            await context.sync();
+
+            return {
+                selectionText: selectionText.value,
+                documentText: documentText.value,
+            };
         });
+    }
+
+    async function askModel() {
+        const questionInput = document.getElementById("questionInput");
+        const previewInput = document.getElementById("previewInput");
+        const applyButton = document.getElementById("applyButton");
+        const question = questionInput.value.trim();
+
+        if (!question) {
+            setStatus("Please enter a question before asking.");
+            return;
+        }
+
+        setStatus("Reading selection and document...");
+        applyButton.disabled = true;
+
+        try {
+            const { selectionText, documentText } = await getDocumentContext();
+            setStatus("Contacting model...");
+
+            const response = await fetch(MODEL_ENDPOINT, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    question,
+                    selectionText,
+                    documentText,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Model request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            const replacementText = data.replacementText ?? data.text ?? "";
+            previewInput.value = replacementText;
+            applyButton.disabled = false;
+            setStatus("Model response received. Review and apply if desired.");
+        } catch (error) {
+            previewInput.value = "";
+            applyButton.disabled = true;
+            setStatus(error.message || "Unable to reach model endpoint.");
+        }
+    }
+
+    async function applyReplacement() {
+        const previewInput = document.getElementById("previewInput");
+        const replacementText = previewInput.value;
+
+        setStatus("Applying replacement to selection...");
+
+        try {
+            await Word.run(async (context) => {
+                const selection = context.document.getSelection();
+                selection.insertText(replacementText, Word.InsertLocation.replace);
+                await context.sync();
+            });
+
+            setStatus("Replacement applied.");
+        } catch (error) {
+            setStatus(error.message || "Unable to apply replacement.");
+        }
+    }
+
+    function resetPreview() {
+        document.getElementById("previewInput").value = "";
+        document.getElementById("applyButton").disabled = true;
+        setStatus("Preview cleared.");
     }
 </script>
 
