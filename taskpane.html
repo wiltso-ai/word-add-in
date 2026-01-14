@@ -5,6 +5,45 @@
 <head>
     <!-- Office JavaScript API -->
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 16px;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-top: 12px;
+        }
+
+        textarea,
+        input[type="text"] {
+            width: 100%;
+            margin-top: 6px;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            min-height: 90px;
+            resize: vertical;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        button {
+            padding: 6px 12px;
+        }
+
+        .readonly {
+            background-color: #f5f5f5;
+        }
+    </style>
 </head>
 
 <body>
@@ -21,6 +60,36 @@
         </div>
     </div>
     <p id="statusText" aria-live="polite"></p>
+    <label for="questionInput">Ask a question</label>
+    <textarea id="questionInput" placeholder="Ask about the current selection..."></textarea>
+
+    <label for="selectionContext">Current selection</label>
+    <textarea id="selectionContext" class="readonly" readonly
+        placeholder="Select text in the document to see it here."></textarea>
+
+    <label for="responsePreview">Response preview</label>
+    <textarea id="responsePreview" class="readonly" readonly
+        placeholder="Proposed replacement text will appear here."></textarea>
+
+    <div class="button-row">
+        <button id="sendButton">Send</button>
+        <button id="editButton" hidden>Edit</button>
+        <button id="acceptButton" hidden>Accept</button>
+        <button id="cancelButton" hidden>Cancel</button>
+    </div>
+
+    <h2>Assistant Preview</h2>
+    <label for="apiEndpoint">API Endpoint</label>
+    <input id="apiEndpoint" type="text" size="60" value="https://example.com/assistant" />
+
+    <div>
+        <label for="questionInput">Question</label>
+        <input id="questionInput" type="text" size="60" placeholder="Ask a question about the document..." />
+        <button id="askAssistantButton">Ask assistant</button>
+    </div>
+
+    <div id="previewStatus">Idle.</div>
+    <pre id="previewOutput"></pre>
 
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
@@ -28,7 +97,6 @@
 
 <script>
     Office.onReady((info) => {
-        // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
             document.getElementById("generateButton").onclick = generateUpdate;
             document.getElementById("acceptButton").onclick = acceptUpdate;
@@ -94,6 +162,221 @@
     }
 
     resetUI();
+            document.getElementById("askAssistantButton").onclick = askAssistant;
+            document.getElementById("sendButton").onclick = sendRequest;
+            document.getElementById("editButton").onclick = enterEditMode;
+            document.getElementById("acceptButton").onclick = applyReplacement;
+            document.getElementById("cancelButton").onclick = cancelPreview;
+        }
+    });
+
+    const questionInput = document.getElementById("questionInput");
+    const selectionContext = document.getElementById("selectionContext");
+    const responsePreview = document.getElementById("responsePreview");
+    const sendButton = document.getElementById("sendButton");
+    const editButton = document.getElementById("editButton");
+    const acceptButton = document.getElementById("acceptButton");
+    const cancelButton = document.getElementById("cancelButton");
+
+    function setPreviewState({ showPreview, editable }) {
+        responsePreview.readOnly = !editable;
+        responsePreview.classList.toggle("readonly", !editable);
+        editButton.hidden = !showPreview;
+        acceptButton.hidden = !showPreview;
+        cancelButton.hidden = !showPreview;
+        sendButton.hidden = showPreview;
+    }
+
+    function sendRequest() {
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            selection.load("text");
+            await context.sync();
+
+            selectionContext.value = selection.text || "(No text selected.)";
+            responsePreview.value = selection.text
+                ? `Suggested update for: "${questionInput.value || "your request"}"\n\n${selection.text}`
+                : "Select some text to generate a response preview.";
+
+            setPreviewState({ showPreview: true, editable: false });
+        });
+    }
+
+    function setPreviewStatus(message) {
+        document.getElementById("previewStatus").textContent = message;
+    }
+
+    function setPreviewOutput(content) {
+        document.getElementById("previewOutput").textContent = content;
+    }
+
+    function formatResponsePreview(response) {
+        const previewLines = [];
+
+        if (response.updatedText) {
+            previewLines.push(`Updated Text:\n${response.updatedText}`);
+        }
+
+        if (response.commentSuggestions.length) {
+            previewLines.push(`Comment Suggestions:\n- ${response.commentSuggestions.join("\n- ")}`);
+        }
+
+        if (response.citations.length) {
+            const citationLines = response.citations.map((citation) => {
+                const quoteSuffix = citation.quote ? `\n  Quote: ${citation.quote}` : "";
+                return `- Source: ${citation.source}${quoteSuffix}`;
+            });
+            previewLines.push(`Citations:\n${citationLines.join("\n")}`);
+        }
+
+        if (response.lawLookup) {
+            previewLines.push(
+                `Law Lookup:\nQuery: ${response.lawLookup.query}\nResults:\n- ${response.lawLookup.results.join("\n- ")}`
+            );
+        }
+
+        if (!previewLines.length) {
+            return "No recognized response fields were returned.";
+        }
+
+        return previewLines.join("\n\n");
+    }
+
+    /**
+     * @typedef {Object} AssistantApiResponse
+     * @property {string=} updatedText
+     * @property {string[]=} commentSuggestions
+     * @property {Array<{source: string, quote?: string}>=} citations
+     * @property {{query: string, results: string[]}=} lawLookup
+     */
+
+    function normalizeAssistantResponse(payload) {
+        const normalized = {
+            updatedText: typeof payload.updatedText === "string" ? payload.updatedText : "",
+            commentSuggestions: Array.isArray(payload.commentSuggestions)
+                ? payload.commentSuggestions.filter((item) => typeof item === "string")
+                : [],
+            citations: Array.isArray(payload.citations)
+                ? payload.citations
+                      .filter((item) => item && typeof item.source === "string")
+                      .map((item) => ({
+                          source: item.source,
+                          quote: typeof item.quote === "string" ? item.quote : "",
+                      }))
+                : [],
+            lawLookup:
+                payload.lawLookup &&
+                typeof payload.lawLookup.query === "string" &&
+                Array.isArray(payload.lawLookup.results)
+                    ? {
+                          query: payload.lawLookup.query,
+                          results: payload.lawLookup.results.filter((item) => typeof item === "string"),
+                      }
+                    : null,
+        };
+
+        return normalized;
+    }
+
+    async function callAssistantApi({ documentText, selectionText, question, endpoint }) {
+        setPreviewStatus("Sending request...");
+        setPreviewOutput("");
+
+        let response;
+        try {
+            response = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ documentText, selectionText, question }),
+            });
+        } catch (error) {
+            setPreviewStatus(`Network error: ${error.message}`);
+            return null;
+        }
+
+        if (!response.ok) {
+            setPreviewStatus(`Request failed with status ${response.status}.`);
+            return null;
+        }
+
+        const responseText = await response.text();
+        if (!responseText.trim()) {
+            setPreviewStatus("Empty response received from the assistant API.");
+            return null;
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(responseText);
+        } catch (error) {
+            setPreviewStatus(`Invalid JSON response: ${error.message}`);
+            return null;
+        }
+
+        if (!parsed || typeof parsed !== "object") {
+            setPreviewStatus("Assistant API returned an unexpected payload.");
+            return null;
+        }
+
+        const normalizedResponse = normalizeAssistantResponse(parsed);
+        setPreviewStatus("Response received.");
+        setPreviewOutput(formatResponsePreview(normalizedResponse));
+        return normalizedResponse;
+    }
+
+    function askAssistant() {
+        return Word.run(async (context) => {
+            const question = document.getElementById("questionInput").value.trim();
+            const endpoint = document.getElementById("apiEndpoint").value.trim();
+
+            if (!endpoint) {
+                setPreviewStatus("Please provide an API endpoint.");
+                return;
+            }
+
+            const body = context.document.body;
+            const selection = context.document.getSelection();
+            body.load("text");
+            selection.load("text");
+            await context.sync();
+
+            await callAssistantApi({
+                documentText: body.text,
+                selectionText: selection.text,
+                question,
+                endpoint,
+            });
+        }).catch((error) => {
+            setPreviewStatus(`Word error: ${error.message}`);
+        });
+    }
+    function enterEditMode() {
+        responsePreview.focus();
+        setPreviewState({ showPreview: true, editable: true });
+    }
+
+    function applyReplacement() {
+        return Word.run(async (context) => {
+            const selection = context.document.getSelection();
+            selection.insertText(responsePreview.value, Word.InsertLocation.replace);
+            await context.sync();
+
+            resetPreview();
+        });
+    }
+
+    function cancelPreview() {
+        resetPreview();
+    }
+
+    function resetPreview() {
+        responsePreview.value = "";
+        responsePreview.readOnly = true;
+        responsePreview.classList.add("readonly");
+        setPreviewState({ showPreview: false, editable: false });
+    }
 </script>
 
 </html>
