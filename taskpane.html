@@ -34,6 +34,24 @@
             font-size: 12px;
             color: #555;
         }
+
+        .status.error {
+            color: #b00020;
+        }
+
+        .supplemental {
+            margin-top: 12px;
+        }
+
+        .supplemental textarea {
+            min-height: 60px;
+        }
+
+        .comment-list {
+            margin: 6px 0 0;
+            padding-left: 18px;
+            font-size: 13px;
+        }
     </style>
 </head>
 
@@ -52,6 +70,17 @@
     <label for="previewInput">Proposed replacement (editable)</label>
     <textarea id="previewInput" placeholder="Model response will appear here..."></textarea>
 
+    <div class="supplemental">
+        <label for="lawSummaryInput">Law summary</label>
+        <textarea id="lawSummaryInput" placeholder="Optional law summary will appear here..." readonly></textarea>
+
+        <label for="lawTextInput">Law text</label>
+        <textarea id="lawTextInput" placeholder="Optional law text will appear here..." readonly></textarea>
+
+        <label>Comments</label>
+        <ul id="commentList" class="comment-list"></ul>
+    </div>
+
     <div id="statusMessage" class="status"></div>
 
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
@@ -59,7 +88,7 @@
 </body>
 
 <script>
-    const MODEL_ENDPOINT = "/api/model";
+    const MODEL_API_URL = "https://your-api/assist";
 
     Office.onReady((info) => {
         if (info.host === Office.HostType.Word) {
@@ -69,8 +98,10 @@
         }
     });
 
-    function setStatus(message) {
-        document.getElementById("statusMessage").textContent = message;
+    function setStatus(message, isError = false) {
+        const statusElement = document.getElementById("statusMessage");
+        statusElement.textContent = message;
+        statusElement.classList.toggle("error", isError);
     }
 
     async function getDocumentContext() {
@@ -92,20 +123,31 @@
         const previewInput = document.getElementById("previewInput");
         const applyButton = document.getElementById("applyButton");
         const question = questionInput.value.trim();
+        const lawSummaryInput = document.getElementById("lawSummaryInput");
+        const lawTextInput = document.getElementById("lawTextInput");
+        const commentList = document.getElementById("commentList");
 
         if (!question) {
-            setStatus("Please enter a question before asking.");
+            setStatus("Please enter a question before asking.", true);
             return;
         }
 
         setStatus("Reading selection and document...");
         applyButton.disabled = true;
+        previewInput.value = "";
+        lawSummaryInput.value = "";
+        lawTextInput.value = "";
+        commentList.innerHTML = "";
 
         try {
             const { selectionText, documentText } = await getDocumentContext();
+            if (!selectionText) {
+                setStatus("Select some text in the document before asking.", true);
+                return;
+            }
             setStatus("Contacting model...");
 
-            const response = await fetch(MODEL_ENDPOINT, {
+            const response = await fetch(MODEL_API_URL, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -122,14 +164,30 @@
             }
 
             const data = await response.json();
-            const replacementText = data.replacementText ?? data.text ?? "";
+            const replacementText = data.replacementText ?? "";
+            const comments = Array.isArray(data.comments) ? data.comments : [];
             previewInput.value = replacementText;
+            lawSummaryInput.value = data.lawSummary ?? "";
+            lawTextInput.value = data.lawText ?? "";
+            commentList.innerHTML = "";
+            if (comments.length === 0) {
+                const emptyItem = document.createElement("li");
+                emptyItem.textContent = "No comments returned.";
+                commentList.appendChild(emptyItem);
+            } else {
+                comments.forEach((comment) => {
+                    const item = document.createElement("li");
+                    const rangeText = comment.rangeText ? `"${comment.rangeText}"` : "Selected text";
+                    item.textContent = `${rangeText}: ${comment.commentText ?? "No comment text provided."}`;
+                    commentList.appendChild(item);
+                });
+            }
             applyButton.disabled = false;
             setStatus("Model response received. Review and apply if desired.");
         } catch (error) {
             previewInput.value = "";
             applyButton.disabled = true;
-            setStatus(error.message || "Unable to reach model endpoint.");
+            setStatus(error.message || "Unable to reach model endpoint.", true);
         }
     }
 
@@ -154,6 +212,9 @@
 
     function resetPreview() {
         document.getElementById("previewInput").value = "";
+        document.getElementById("lawSummaryInput").value = "";
+        document.getElementById("lawTextInput").value = "";
+        document.getElementById("commentList").innerHTML = "";
         document.getElementById("applyButton").disabled = true;
         setStatus("Preview cleared.");
     }
