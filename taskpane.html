@@ -10,6 +10,9 @@
 <body>
     <p>This add-in will insert the text 'Hello world!'.</p>
     <button id="helloButton">Say hello</button>
+    <p id="selectionWarning" style="display: none; color: #b33; margin-top: 8px;">
+        Please select some text in the document before running the add-in.
+    </p>
 
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
@@ -24,13 +27,40 @@
     });
 
     function sayHello() {
-        return Word.run((context) => {
+        const warningElement = document.getElementById("selectionWarning");
+        warningElement.style.display = "none";
 
-            // insert a paragraph at the start of the document.
-            const paragraph = context.document.body.insertParagraph("Hello World", Word.InsertLocation.start);
-            
-            // sync the context to run the previous API call, and return.
-            return context.sync();
+        return Word.run((context) => {
+            const selection = context.document.getSelection();
+            const selectionText = selection.getText();
+            const selectionStart = selection.getRange(Word.RangeLocation.start);
+            const selectionEnd = selection.getRange(Word.RangeLocation.end);
+            const documentText = context.document.body.getText();
+
+            selectionText.load("value");
+            documentText.load("value");
+
+            return context.sync().then(() => {
+                if (!selectionText.value || !selectionText.value.trim()) {
+                    warningElement.style.display = "block";
+                    return;
+                }
+
+                const requestPayload = {
+                    selectionText: selectionText.value,
+                    selectionRangeLocation: {
+                        start: selectionStart,
+                        end: selectionEnd,
+                    },
+                    documentText: documentText.value,
+                };
+
+                // insert a paragraph at the start of the document.
+                context.document.body.insertParagraph("Hello World", Word.InsertLocation.start);
+
+                console.log("Prepared request payload", requestPayload);
+                return context.sync();
+            });
         });
     }
 </script>
