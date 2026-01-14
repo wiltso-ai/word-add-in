@@ -11,6 +11,27 @@
     <p>This add-in will insert the text 'Hello world!'.</p>
     <button id="helloButton">Say hello</button>
 
+    <hr />
+
+    <p>Model response (JSON):</p>
+    <textarea id="modelResponse" rows="10" cols="60">
+{
+  "replacements": [
+    { "rangeText": "Hello World", "replacementText": "Hello there" }
+  ],
+  "commentSuggestions": [
+    { "rangeText": "Hello World", "commentText": "Consider a friendlier greeting." }
+  ]
+}
+    </textarea>
+    <div>
+        <label>
+            <input type="checkbox" id="applyCommentsToggle" checked />
+            Apply comment suggestions
+        </label>
+    </div>
+    <button id="applySuggestionsButton">Apply suggestions</button>
+
     <!-- The following image URL tracks diagnostic data for this sample add-in. Please remove the image tag if you reuse this sample in your own code project. -->
     <img src="https://pnptelemetry.azurewebsites.net/pnp-officeaddins/samples/word-add-in-hello-world-run" />
 </body>
@@ -20,6 +41,7 @@
         // Check that we loaded into Word
         if (info.host === Office.HostType.Word) {
             document.getElementById("helloButton").onclick = sayHello;
+            document.getElementById("applySuggestionsButton").onclick = applySuggestions;
         }
     });
 
@@ -31,6 +53,66 @@
             
             // sync the context to run the previous API call, and return.
             return context.sync();
+        });
+    }
+
+    function applySuggestions() {
+        const modelResponseInput = document.getElementById("modelResponse").value;
+        let modelResponse;
+
+        try {
+            modelResponse = JSON.parse(modelResponseInput);
+        } catch (error) {
+            alert("Please provide valid JSON for the model response.");
+            return;
+        }
+
+        const applyComments = document.getElementById("applyCommentsToggle").checked;
+
+        return Word.run(async (context) => {
+            const body = context.document.body;
+            const replacements = Array.isArray(modelResponse.replacements) ? modelResponse.replacements : [];
+            const commentSuggestions = Array.isArray(modelResponse.commentSuggestions)
+                ? modelResponse.commentSuggestions
+                : [];
+
+            for (const replacement of replacements) {
+                if (!replacement?.rangeText || replacement.replacementText === undefined) {
+                    continue;
+                }
+
+                const replacementResults = body.search(replacement.rangeText, {
+                    matchCase: false,
+                    matchWholeWord: false
+                });
+                replacementResults.load("items");
+                await context.sync();
+
+                replacementResults.items.forEach((range) => {
+                    range.insertText(replacement.replacementText, Word.InsertLocation.replace);
+                });
+            }
+
+            if (applyComments) {
+                for (const suggestion of commentSuggestions) {
+                    if (!suggestion?.rangeText || !suggestion?.commentText) {
+                        continue;
+                    }
+
+                    const commentResults = body.search(suggestion.rangeText, {
+                        matchCase: false,
+                        matchWholeWord: false
+                    });
+                    commentResults.load("items");
+                    await context.sync();
+
+                    commentResults.items.forEach((range) => {
+                        range.insertComment(suggestion.commentText);
+                    });
+                }
+            }
+
+            await context.sync();
         });
     }
 </script>
