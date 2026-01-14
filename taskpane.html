@@ -67,6 +67,13 @@
         <button id="cancelButton">Cancel</button>
     </div>
 
+    <div class="supplemental">
+        <label>
+            <input type="checkbox" id="suggestCommentsToggle" checked />
+            Suggest comments
+        </label>
+    </div>
+
     <label for="previewInput">Proposed replacement (editable)</label>
     <textarea id="previewInput" placeholder="Model response will appear here..."></textarea>
 
@@ -89,6 +96,7 @@
 
 <script>
     const MODEL_API_URL = "https://your-api/assist";
+    let lastComments = [];
 
     Office.onReady((info) => {
         if (info.host === Office.HostType.Word) {
@@ -169,6 +177,7 @@
             previewInput.value = replacementText;
             lawSummaryInput.value = data.lawSummary ?? "";
             lawTextInput.value = data.lawText ?? "";
+            lastComments = comments;
             commentList.innerHTML = "";
             if (comments.length === 0) {
                 const emptyItem = document.createElement("li");
@@ -194,6 +203,7 @@
     async function applyReplacement() {
         const previewInput = document.getElementById("previewInput");
         const replacementText = previewInput.value;
+        const suggestComments = document.getElementById("suggestCommentsToggle").checked;
 
         setStatus("Applying replacement to selection...");
 
@@ -201,6 +211,39 @@
             await Word.run(async (context) => {
                 const selection = context.document.getSelection();
                 selection.insertText(replacementText, Word.InsertLocation.replace);
+
+                if (suggestComments && lastComments.length > 0) {
+                    const body = context.document.body;
+                    const commentTargets = [];
+
+                    lastComments.forEach((comment) => {
+                        const commentText = comment.commentText ?? "";
+                        if (!commentText.trim()) {
+                            return;
+                        }
+
+                        if (comment.rangeText) {
+                            const results = body.search(comment.rangeText, {
+                                matchCase: false,
+                                matchWholeWord: false,
+                            });
+                            results.load("items");
+                            commentTargets.push({ results, commentText });
+                        } else {
+                            commentTargets.push({ results: null, commentText });
+                        }
+                    });
+
+                    await context.sync();
+
+                    const fallbackRange = context.document.getSelection();
+                    commentTargets.forEach(({ results, commentText }) => {
+                        const targetRange =
+                            results && results.items.length > 0 ? results.items[0] : fallbackRange;
+                        targetRange.insertComment(commentText);
+                    });
+                }
+
                 await context.sync();
             });
 
@@ -215,6 +258,7 @@
         document.getElementById("lawSummaryInput").value = "";
         document.getElementById("lawTextInput").value = "";
         document.getElementById("commentList").innerHTML = "";
+        lastComments = [];
         document.getElementById("applyButton").disabled = true;
         setStatus("Preview cleared.");
     }
