@@ -17,10 +17,26 @@
             margin-top: 12px;
         }
 
-        textarea {
+        textarea,
+        input[type="text"],
+        input[type="url"] {
             width: 100%;
             min-height: 80px;
             margin-top: 6px;
+        }
+
+        input[type="text"],
+        input[type="url"] {
+            min-height: auto;
+            height: 32px;
+            padding: 6px 8px;
+            box-sizing: border-box;
+        }
+
+        .settings-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
         }
 
         .panel {
@@ -98,6 +114,20 @@
     </div>
 
     <div class="panel">
+        <h3>API settings</h3>
+        <label for="apiBaseUrlInput">API base URL</label>
+        <input id="apiBaseUrlInput" type="url" placeholder="https://your-api" />
+
+        <label for="apiTokenInput">API token (optional)</label>
+        <input id="apiTokenInput" type="text" placeholder="Paste your bearer token" />
+
+        <div class="settings-actions">
+            <button id="saveSettingsButton">Save settings</button>
+            <button id="useWordLoginButton">Use Word login</button>
+        </div>
+    </div>
+
+    <div class="panel">
         <h3>Law text</h3>
         <textarea id="lawTextInput" placeholder="Law text will appear here after lookup..." readonly></textarea>
     </div>
@@ -119,9 +149,11 @@
 </body>
 
 <script>
-    const MODEL_API_URL = "https://your-api/assist";
-    const LAW_LOOKUP_API_URL = "https://your-api/law-lookup";
-    const LAW_SUMMARY_API_URL = "https://your-api/law-summary";
+    const SETTINGS_STORAGE_KEY = "wordAddinSettings";
+    const DEFAULT_API_BASE_URL = "https://your-api";
+    const MODEL_PATH = "assist";
+    const LAW_LOOKUP_PATH = "law-lookup";
+    const LAW_SUMMARY_PATH = "law-summary";
     let lastComments = [];
 
     Office.onReady((info) => {
@@ -131,11 +163,14 @@
             document.getElementById("cancelButton").onclick = resetPreview;
             document.getElementById("lookupLawButton").onclick = lookupLaw;
             document.getElementById("summarizeLawButton").onclick = summarizeLaw;
+            document.getElementById("saveSettingsButton").onclick = saveSettingsFromForm;
+            document.getElementById("useWordLoginButton").onclick = useWordLogin;
             Office.context.document.addHandlerAsync(
                 Office.EventType.DocumentSelectionChanged,
                 updateLookupButtonState
             );
             updateLookupButtonState();
+            loadSettingsIntoForm();
         }
     });
 
@@ -143,6 +178,92 @@
         const statusElement = document.getElementById("statusMessage");
         statusElement.textContent = message;
         statusElement.classList.toggle("error", isError);
+    }
+
+    function normalizeBaseUrl(value) {
+        return value.trim().replace(/\/+$/, "") || DEFAULT_API_BASE_URL;
+    }
+
+    function getStoredSettings() {
+        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (!raw) {
+            return {
+                apiBaseUrl: DEFAULT_API_BASE_URL,
+                apiToken: "",
+            };
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            return {
+                apiBaseUrl: normalizeBaseUrl(parsed.apiBaseUrl || DEFAULT_API_BASE_URL),
+                apiToken: parsed.apiToken || "",
+            };
+        } catch (error) {
+            return {
+                apiBaseUrl: DEFAULT_API_BASE_URL,
+                apiToken: "",
+            };
+        }
+    }
+
+    function saveStoredSettings(settings) {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    }
+
+    function buildEndpoint(baseUrl, path) {
+        const trimmedBase = normalizeBaseUrl(baseUrl);
+        const trimmedPath = path.replace(/^\/+/, "");
+        return `${trimmedBase}/${trimmedPath}`;
+    }
+
+    function buildHeaders() {
+        const { apiToken } = getStoredSettings();
+        const headers = {
+            "Content-Type": "application/json",
+        };
+        if (apiToken.trim()) {
+            headers.Authorization = `Bearer ${apiToken.trim()}`;
+        }
+        return headers;
+    }
+
+    function loadSettingsIntoForm() {
+        const { apiBaseUrl, apiToken } = getStoredSettings();
+        document.getElementById("apiBaseUrlInput").value = apiBaseUrl;
+        document.getElementById("apiTokenInput").value = apiToken;
+    }
+
+    function saveSettingsFromForm() {
+        const apiBaseUrlInput = document.getElementById("apiBaseUrlInput");
+        const apiTokenInput = document.getElementById("apiTokenInput");
+        const apiBaseUrl = normalizeBaseUrl(apiBaseUrlInput.value || DEFAULT_API_BASE_URL);
+        const apiToken = apiTokenInput.value.trim();
+
+        saveStoredSettings({ apiBaseUrl, apiToken });
+        loadSettingsIntoForm();
+        setStatus("Settings saved.");
+    }
+
+    async function useWordLogin() {
+        setStatus("Requesting Word login token...");
+        if (
+            typeof OfficeRuntime === "undefined" ||
+            !OfficeRuntime.auth ||
+            !OfficeRuntime.auth.getAccessToken
+        ) {
+            setStatus("Word login is not available in this host.", true);
+            return;
+        }
+        try {
+            const token = await OfficeRuntime.auth.getAccessToken({ allowSignInPrompt: true });
+            const settings = getStoredSettings();
+            settings.apiToken = token;
+            saveStoredSettings(settings);
+            loadSettingsIntoForm();
+            setStatus("Token saved from Word login.");
+        } catch (error) {
+            setStatus(error.message || "Unable to retrieve Word login token.", true);
+        }
     }
 
     async function getDocumentContext() {
@@ -205,11 +326,10 @@
             }
             setStatus("Contacting model...");
 
-            const response = await fetch(MODEL_API_URL, {
+            const { apiBaseUrl } = getStoredSettings();
+            const response = await fetch(buildEndpoint(apiBaseUrl, MODEL_PATH), {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: buildHeaders(),
                 body: JSON.stringify({
                     question,
                     selectionText,
@@ -265,11 +385,10 @@
                 return;
             }
 
-            const response = await fetch(LAW_LOOKUP_API_URL, {
+            const { apiBaseUrl } = getStoredSettings();
+            const response = await fetch(buildEndpoint(apiBaseUrl, LAW_LOOKUP_PATH), {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: buildHeaders(),
                 body: JSON.stringify({
                     citation: selectionText,
                 }),
@@ -307,11 +426,10 @@
         lawSummaryInput.value = "";
 
         try {
-            const response = await fetch(LAW_SUMMARY_API_URL, {
+            const { apiBaseUrl } = getStoredSettings();
+            const response = await fetch(buildEndpoint(apiBaseUrl, LAW_SUMMARY_PATH), {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: buildHeaders(),
                 body: JSON.stringify({
                     lawText,
                 }),
